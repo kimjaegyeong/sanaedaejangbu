@@ -1,0 +1,101 @@
+package com.e201.api.service.store;
+
+import java.util.List;
+import java.util.UUID;
+
+import org.springframework.stereotype.Service;
+
+import com.e201.api.controller.store.request.MenuCreateRequest;
+import com.e201.api.controller.store.request.MenuUpdateRequest;
+import com.e201.api.controller.store.response.MenuCreateResponse;
+import com.e201.api.controller.store.response.MenuDeleteResponse;
+import com.e201.api.controller.store.response.MenuFindResponse;
+import com.e201.api.controller.store.response.MenuUpdateResponse;
+import com.e201.domain.annotation.JtaTransactional;
+import com.e201.domain.entity.store.Menu;
+import com.e201.domain.entity.store.Store;
+import com.e201.domain.repository.store.MenuRepository;
+import com.e201.global.security.auth.constant.RoleType;
+
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+@JtaTransactional(readOnly = true)
+public class MenuService {
+
+	private final MenuRepository menuRepository;
+	private final StoreService storeService;
+
+	@JtaTransactional
+	public MenuCreateResponse create(UUID id, RoleType roleType, MenuCreateRequest menuCreateRequest) {
+		validationStore(roleType);
+		Store store = storeService.findEntity(id);
+		Menu menu = menuCreateRequest.toEntity(store);
+		Menu savedMenu = menuRepository.save(menu);
+		return new MenuCreateResponse(savedMenu.getId());
+	}
+
+	public Menu findEntity(UUID id) {
+		return menuRepository.findByIdAndModifiedYNAndDeleteYN(id, "N", "N")
+			.orElseThrow(() -> new RuntimeException("not found exception"));
+	}
+
+	public MenuFindResponse findOne(UUID id) {
+		Menu menu = findEntity(id);
+		return MenuFindResponse.builder()
+			.id(id)
+			.name(menu.getName())
+			.price(menu.getPrice())
+			.category(menu.getCategory())
+			.build();
+	}
+
+	public List<MenuFindResponse> find(RoleType roleType, UUID id) {
+		validationStore(roleType);
+		return menuRepository.findByStoreIdAndModifiedYNAndDeleteYN(id, "N", "N")
+			.stream()
+			.map(menu -> MenuFindResponse.builder()
+				.id(menu.getId())
+				.name(menu.getName())
+				.price(menu.getPrice())
+				.category(menu.getCategory())
+				.build())
+			.toList();
+	}
+
+	@JtaTransactional
+	public MenuUpdateResponse modify(RoleType roleType, UUID menuId, MenuUpdateRequest menuUpdateRequest) {
+		validationStore(roleType);
+		Menu originMenu = findEntity(menuId);
+		originMenu.softUpdate();
+		//새롭게 menu 추가하기 
+		Menu menu = createModifiedStoreEntity(menuUpdateRequest, originMenu);
+		Menu modifiedMenu = menuRepository.save(menu);
+		return new MenuUpdateResponse(modifiedMenu.getId());
+	}
+
+	@JtaTransactional
+	public MenuDeleteResponse delete(UUID menuId, RoleType roleType) {
+		validationStore(roleType);
+		Menu originMenu = findEntity(menuId);
+		originMenu.softDelete();
+		return new MenuDeleteResponse(originMenu.getId());
+	}
+
+	private Menu createModifiedStoreEntity(MenuUpdateRequest menuUpdateRequest, Menu originMenu) {
+		return Menu.builder()
+			.store(originMenu.getStore())
+			.price(menuUpdateRequest.getPrice())
+			.name(menuUpdateRequest.getName())
+			.category(menuUpdateRequest.getCategory())
+			.build();
+
+	}
+
+	private void validationStore(RoleType roleType) {
+		if (roleType != RoleType.STORE) {
+			throw new RuntimeException("store validation error");
+		}
+	}
+}
