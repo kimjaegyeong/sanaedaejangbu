@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import com.e201.api.controller.store.request.FindPaymentsCondition;
@@ -31,9 +30,14 @@ import com.e201.domain.entity.payment.Payment;
 import com.e201.domain.entity.store.Menu;
 import com.e201.domain.entity.store.Sales;
 import com.e201.domain.entity.store.Store;
+import com.e201.domain.entity.outbox.Outbox;
+import com.e201.domain.repository.payment.OutboxRepository;
 import com.e201.domain.repository.store.SalesRepository;
+import com.e201.global.config.RabbitMQConfig;
 import com.e201.global.event.PaymentMonthlySumEvent;
 import com.e201.global.event.SalesCreatedEvent;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -49,7 +53,8 @@ public class SalesService {
 	private final StoreService storeService;
 	private final CompanyService companyService;
 	private final QRService qrService;
-	private final ApplicationEventPublisher eventPublisher;
+	private final OutboxRepository outboxRepository;
+	private final ObjectMapper objectMapper;
 
 	public Sales findEntity(UUID id) {
 		return salesRepository.findById(id).orElseThrow(() -> new RuntimeException("not found exception"));
@@ -68,14 +73,26 @@ public class SalesService {
 			.map(PaymentMenuCreateRequest::getId)
 			.toList();
 
-		eventPublisher.publishEvent(new SalesCreatedEvent(
-			savedPayment.getId(), company.getId(), storeId,
-			storePaymentCreateRequest.getEmployeeId(), menuIds));
+		saveOutbox(RabbitMQConfig.ROUTING_SALES,
+			new SalesCreatedEvent(savedPayment.getId(), company.getId(), storeId,
+				storePaymentCreateRequest.getEmployeeId(), menuIds));
 
-		eventPublisher.publishEvent(new PaymentMonthlySumEvent(
-			contract.getId(), storePaymentCreateRequest.getTotalAmount()));
+		saveOutbox(RabbitMQConfig.ROUTING_MONTHLY_SUM,
+			new PaymentMonthlySumEvent(contract.getId(), storePaymentCreateRequest.getTotalAmount()));
 
 		return savedPayment.getId();
+	}
+
+	private void saveOutbox(String eventType, Object event) {
+		try {
+			String payload = objectMapper.writeValueAsString(event);
+			outboxRepository.save(Outbox.builder()
+				.eventType(eventType)
+				.payload(payload)
+				.build());
+		} catch (JsonProcessingException e) {
+			throw new RuntimeException("Outbox 직렬화 실패", e);
+		}
 	}
 
 	@JtaTransactional
