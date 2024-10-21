@@ -51,6 +51,10 @@ public class PaymentMonthlySum extends BaseEntity {
 		this.invoiceId = invoiceId;
 	}
 
+	public void addAmount(Long paymentAmount) {
+		this.amount += paymentAmount;
+	}
+
 	public void settlementUnpaid() {
 		// 미수금 정산 완료
 		this.paid = amount;

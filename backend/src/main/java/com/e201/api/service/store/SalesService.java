@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
@@ -29,7 +30,14 @@ import com.e201.domain.entity.payment.Payment;
 import com.e201.domain.entity.store.Menu;
 import com.e201.domain.entity.store.Sales;
 import com.e201.domain.entity.store.Store;
+import com.e201.domain.entity.outbox.Outbox;
+import com.e201.domain.repository.payment.OutboxRepository;
 import com.e201.domain.repository.store.SalesRepository;
+import com.e201.global.config.RabbitMQConfig;
+import com.e201.global.event.PaymentMonthlySumEvent;
+import com.e201.global.event.SalesCreatedEvent;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -45,6 +53,8 @@ public class SalesService {
 	private final StoreService storeService;
 	private final CompanyService companyService;
 	private final QRService qrService;
+	private final OutboxRepository outboxRepository;
+	private final ObjectMapper objectMapper;
 
 	public Sales findEntity(UUID id) {
 		return salesRepository.findById(id).orElseThrow(() -> new RuntimeException("not found exception"));
@@ -53,24 +63,36 @@ public class SalesService {
 	@JtaTransactional
 	public UUID createPayment(StorePaymentCreateRequest storePaymentCreateRequest, UUID storeId) {
 		QRValidation(storePaymentCreateRequest.getQrId());
-		//employeeId로 companyId 조회 -> emplyeeId로 department_id 조회, department의 id와 일치하는 department 모두 조회
-		// department에서 companyId 조회
 		Company company = findCompany(storePaymentCreateRequest);
-		//company_id 와 store_id 로 contract_id 조회
 		Contract contract = contractService.findContractWithCompanyIdAndStoreId(company.getId(), storeId);
 		Store store = storeService.findEntity(storeId);
-		//contract_id, employee_id, totalAmount
 		Payment savedPayment = paymentService.save(contract.getId(), storePaymentCreateRequest.getEmployeeId(), store,
 			storePaymentCreateRequest.getTotalAmount());
 
-		//sales에 for menuList
-		for (PaymentMenuCreateRequest menuRequest : storePaymentCreateRequest.getMenus()) {
-			Menu menu = menuService.findEntity(menuRequest.getId());
-			createSales(menu, company.getId(), storeId, savedPayment.getId(),
-				storePaymentCreateRequest.getEmployeeId());
-		}
+		List<UUID> menuIds = storePaymentCreateRequest.getMenus().stream()
+			.map(PaymentMenuCreateRequest::getId)
+			.toList();
+
+		saveOutbox(RabbitMQConfig.ROUTING_SALES,
+			new SalesCreatedEvent(savedPayment.getId(), company.getId(), storeId,
+				storePaymentCreateRequest.getEmployeeId(), menuIds));
+
+		saveOutbox(RabbitMQConfig.ROUTING_MONTHLY_SUM,
+			new PaymentMonthlySumEvent(contract.getId(), storePaymentCreateRequest.getTotalAmount()));
 
 		return savedPayment.getId();
+	}
+
+	private void saveOutbox(String eventType, Object event) {
+		try {
+			String payload = objectMapper.writeValueAsString(event);
+			outboxRepository.save(Outbox.builder()
+				.eventType(eventType)
+				.payload(payload)
+				.build());
+		} catch (JsonProcessingException e) {
+			throw new RuntimeException("Outbox 직렬화 실패", e);
+		}
 	}
 
 	@JtaTransactional

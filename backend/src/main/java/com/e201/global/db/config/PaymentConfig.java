@@ -24,7 +24,7 @@ public class PaymentConfig {
 	public LocalContainerEntityManagerFactoryBean paymentEntityManagerFactory(DataSource paymentDataSource) {
 		LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
 		em.setDataSource(paymentDataSource);
-		em.setPackagesToScan("com.e201.domain.entity.payment");
+		em.setPackagesToScan("com.e201.domain.entity.payment", "com.e201.domain.entity.outbox");
 		em.setPersistenceUnitName("paymentEntityManager");
 
 		Properties properties = new Properties();
